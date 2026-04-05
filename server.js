@@ -160,20 +160,22 @@ app.get('/api/download', async (req, res) => {
   // Use a temp file so ffmpeg can merge properly (streaming to stdout breaks merging)
   const tmpDir = os.tmpdir();
   const tmpBase = path.join(tmpDir, `vdl_${Date.now()}`);
-  const tmpOut = `${tmpBase}.${ext}`;
 
   let args;
   if (isAudio) {
+    // Use %(ext)s so yt-dlp names the file after conversion (e.g. .mp3)
     args = [
       '-m', 'yt_dlp',
       ...ytdlpBase(),
       '--no-playlist',
-      '-f', 'bestaudio',
+      '-f', 'bestaudio/best',
       '-x', '--audio-format', 'mp3',
-      '-o', tmpOut,
+      '--audio-quality', '0',
+      '-o', `${tmpBase}.%(ext)s`,
       url,
     ];
   } else {
+    // Always request video + best audio and merge to mp4
     const fmtSelector = format_id && format_id !== 'best'
       ? `${format_id}+bestaudio/bestvideo+bestaudio/best`
       : 'bestvideo+bestaudio/best';
@@ -183,7 +185,7 @@ app.get('/api/download', async (req, res) => {
       '--no-playlist',
       '-f', fmtSelector,
       '--merge-output-format', 'mp4',
-      '-o', tmpOut,
+      '-o', `${tmpBase}.%(ext)s`,
       url,
     ];
   }
@@ -206,6 +208,11 @@ app.get('/api/download', async (req, res) => {
       req.on('close', () => { try { proc.kill(); } catch {} });
     });
 
+    // Find the actual output file (yt-dlp fills in %(ext)s)
+    const files = fs.readdirSync(tmpDir).filter(f => f.startsWith(path.basename(tmpBase)));
+    if (files.length === 0) throw new Error('Output file not found after download');
+    const tmpOut = path.join(tmpDir, files[0]);
+
     // Stream the finished file to the browser
     const stat = fs.statSync(tmpOut);
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -221,7 +228,11 @@ app.get('/api/download', async (req, res) => {
 
   } catch (err) {
     console.error('[download error]', err.message);
-    fs.unlink(tmpOut, () => {});
+    // Clean up any partial temp files
+    try {
+      fs.readdirSync(tmpDir).filter(f => f.startsWith(path.basename(tmpBase)))
+        .forEach(f => fs.unlink(path.join(tmpDir, f), () => {}));
+    } catch {}
     if (!res.headersSent) res.status(500).json({ error: err.message });
     else res.end();
   }
