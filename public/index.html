@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VideoGrab - Download Videos Free</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f0f1a;
+      color: #e0e0e0;
+      min-height: 100vh;
+    }
+
+    /* Header */
+    header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      border-bottom: 1px solid #2a2a4a;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .logo {
+      font-size: 26px;
+      font-weight: 800;
+      background: linear-gradient(90deg, #6c63ff, #ff6584);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .logo-icon { font-size: 28px; }
+
+    /* Hero */
+    .hero {
+      text-align: center;
+      padding: 60px 20px 40px;
+    }
+    .hero h1 {
+      font-size: clamp(28px, 5vw, 48px);
+      font-weight: 800;
+      background: linear-gradient(90deg, #6c63ff, #ff6584, #ffd166);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 12px;
+    }
+    .hero p {
+      color: #888;
+      font-size: 16px;
+      margin-bottom: 32px;
+    }
+
+    /* Supported platforms badges */
+    .platforms {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 40px;
+    }
+    .platform-badge {
+      background: #1e1e3a;
+      border: 1px solid #2a2a4a;
+      border-radius: 20px;
+      padding: 6px 14px;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #aaa;
+    }
+    .platform-badge .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+    }
+
+    /* URL Input */
+    .search-box {
+      max-width: 700px;
+      margin: 0 auto 40px;
+      padding: 0 20px;
+    }
+    .input-wrap {
+      display: flex;
+      background: #1e1e3a;
+      border: 2px solid #2a2a4a;
+      border-radius: 14px;
+      overflow: hidden;
+      transition: border-color 0.2s;
+    }
+    .input-wrap:focus-within {
+      border-color: #6c63ff;
+    }
+    .input-wrap input {
+      flex: 1;
+      padding: 16px 20px;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: #e0e0e0;
+      font-size: 15px;
+    }
+    .input-wrap input::placeholder { color: #555; }
+    .btn-fetch {
+      background: linear-gradient(135deg, #6c63ff, #8b5cf6);
+      border: none;
+      padding: 0 28px;
+      color: white;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+      white-space: nowrap;
+    }
+    .btn-fetch:hover { opacity: 0.85; }
+    .btn-fetch:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Result card */
+    #result {
+      max-width: 700px;
+      margin: 0 auto;
+      padding: 0 20px 60px;
+      display: none;
+    }
+    .card {
+      background: #1a1a2e;
+      border: 1px solid #2a2a4a;
+      border-radius: 16px;
+      overflow: hidden;
+    }
+    .card-media {
+      position: relative;
+      background: #0a0a14;
+      aspect-ratio: 16/9;
+      overflow: hidden;
+    }
+    .card-media img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .platform-tag {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(4px);
+      border-radius: 8px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      color: white;
+    }
+    .duration-tag {
+      position: absolute;
+      bottom: 12px;
+      right: 12px;
+      background: rgba(0,0,0,0.75);
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: 12px;
+      color: #ddd;
+    }
+    .card-body {
+      padding: 20px;
+    }
+    .video-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      line-height: 1.4;
+    }
+    .video-meta {
+      font-size: 13px;
+      color: #666;
+      margin-bottom: 20px;
+    }
+
+    /* Format selector */
+    .format-label {
+      font-size: 13px;
+      color: #888;
+      margin-bottom: 10px;
+      font-weight: 500;
+    }
+    .formats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+    .format-btn {
+      background: #12122a;
+      border: 2px solid #2a2a4a;
+      border-radius: 10px;
+      padding: 10px 8px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.15s;
+      color: #ccc;
+    }
+    .format-btn:hover {
+      border-color: #6c63ff;
+      background: #1a1a3a;
+    }
+    .format-btn.selected {
+      border-color: #6c63ff;
+      background: rgba(108, 99, 255, 0.15);
+      color: #a5a0ff;
+    }
+    .format-btn .fmt-label {
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .format-btn .fmt-size {
+      font-size: 11px;
+      color: #555;
+      margin-top: 2px;
+    }
+
+    /* Download button */
+    .btn-download {
+      width: 100%;
+      padding: 15px;
+      background: linear-gradient(135deg, #6c63ff, #ff6584);
+      border: none;
+      border-radius: 12px;
+      color: white;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .btn-download:hover { opacity: 0.9; transform: translateY(-1px); }
+    .btn-download:active { transform: translateY(0); }
+    .btn-download:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+    /* Status / error */
+    .status {
+      text-align: center;
+      padding: 20px;
+      font-size: 14px;
+    }
+    .status.loading { color: #6c63ff; }
+    .status.error { color: #ff6b6b; }
+
+    /* Spinner */
+    .spinner {
+      display: inline-block;
+      width: 18px; height: 18px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* How it works */
+    .how-section {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 0 20px 80px;
+    }
+    .how-section h2 {
+      text-align: center;
+      font-size: 22px;
+      color: #ccc;
+      margin-bottom: 30px;
+    }
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 20px;
+    }
+    .step {
+      background: #1a1a2e;
+      border: 1px solid #2a2a4a;
+      border-radius: 14px;
+      padding: 24px 20px;
+      text-align: center;
+    }
+    .step-num {
+      width: 40px; height: 40px;
+      background: linear-gradient(135deg, #6c63ff, #8b5cf6);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 16px;
+      margin: 0 auto 12px;
+    }
+    .step h3 { font-size: 15px; margin-bottom: 6px; }
+    .step p { font-size: 13px; color: #666; line-height: 1.5; }
+
+    footer {
+      text-align: center;
+      padding: 20px;
+      color: #444;
+      font-size: 13px;
+      border-top: 1px solid #1a1a2e;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="logo-icon">&#9654;&#65039;</span>
+  <span class="logo">VideoGrab</span>
+</header>
+
+<main>
+  <section class="hero">
+    <h1>Download Any Video, Free</h1>
+    <p>Paste a link from TikTok, YouTube, Facebook, Instagram &amp; more</p>
+
+    <div class="platforms">
+      <span class="platform-badge"><span class="dot" style="background:#ff0050"></span> TikTok</span>
+      <span class="platform-badge"><span class="dot" style="background:#ff0000"></span> YouTube</span>
+      <span class="platform-badge"><span class="dot" style="background:#1877f2"></span> Facebook</span>
+      <span class="platform-badge"><span class="dot" style="background:#e1306c"></span> Instagram</span>
+      <span class="platform-badge"><span class="dot" style="background:#1da1f2"></span> Twitter/X</span>
+      <span class="platform-badge"><span class="dot" style="background:#aaa"></span> 1000+ more</span>
+    </div>
+  </section>
+
+  <div class="search-box">
+    <div class="input-wrap">
+      <input type="url" id="urlInput" placeholder="Paste video URL here..." autocomplete="off" />
+      <button class="btn-fetch" id="fetchBtn" onclick="fetchInfo()">Get Video</button>
+    </div>
+  </div>
+
+  <div id="statusMsg"></div>
+
+  <div id="result">
+    <div class="card">
+      <div class="card-media">
+        <img id="thumbnail" src="" alt="thumbnail" />
+        <span class="platform-tag" id="platformTag"></span>
+        <span class="duration-tag" id="durationTag"></span>
+      </div>
+      <div class="card-body">
+        <div class="video-title" id="videoTitle"></div>
+        <div class="video-meta" id="videoMeta"></div>
+
+        <div class="format-label">Select Quality</div>
+        <div class="formats-grid" id="formatsGrid"></div>
+
+        <button class="btn-download" id="downloadBtn" onclick="downloadVideo()">
+          &#8595; Download
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <section class="how-section">
+    <h2>How it works</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <h3>Copy the link</h3>
+        <p>Go to TikTok, YouTube, Facebook or any supported site and copy the video URL.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <h3>Paste &amp; Fetch</h3>
+        <p>Paste the URL in the box above and click "Get Video" to load video info.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <h3>Choose quality</h3>
+        <p>Pick the resolution or audio format you want to download.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <h3>Download</h3>
+        <p>Click Download and the file will save directly to your device.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  VideoGrab &mdash; For personal use only. Respect copyright laws.
+</footer>
+
+<script>
+  let currentInfo = null;
+  let selectedFormat = null;
+
+  function showStatus(msg, type = '') {
+    const el = document.getElementById('statusMsg');
+    el.innerHTML = msg ? `<div class="status ${type}">${msg}</div>` : '';
+  }
+
+  function formatDuration(secs) {
+    if (!secs) return '';
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    if (h) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    return `${m}:${String(s).padStart(2,'0')}`;
+  }
+
+  function formatSize(bytes) {
+    if (!bytes) return '';
+    if (bytes > 1e9) return (bytes / 1e9).toFixed(1) + ' GB';
+    if (bytes > 1e6) return (bytes / 1e6).toFixed(0) + ' MB';
+    return (bytes / 1e3).toFixed(0) + ' KB';
+  }
+
+  async function fetchInfo() {
+    const url = document.getElementById('urlInput').value.trim();
+    if (!url) return;
+
+    document.getElementById('result').style.display = 'none';
+    document.getElementById('fetchBtn').disabled = true;
+    showStatus('<span class="spinner"></span> Fetching video info...', 'loading');
+
+    try {
+      const res = await fetch('/api/info?url=' + encodeURIComponent(url));
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to fetch');
+
+      currentInfo = data;
+      renderResult(data, url);
+      showStatus('');
+    } catch (e) {
+      showStatus('Error: ' + e.message, 'error');
+    } finally {
+      document.getElementById('fetchBtn').disabled = false;
+    }
+  }
+
+  function renderResult(info, url) {
+    document.getElementById('thumbnail').src = info.thumbnail || '';
+    document.getElementById('platformTag').textContent = info.platform || '';
+    document.getElementById('durationTag').textContent = formatDuration(info.duration);
+    document.getElementById('videoTitle').textContent = info.title || 'Unknown title';
+    document.getElementById('videoMeta').textContent = info.uploader ? 'By ' + info.uploader : '';
+
+    const grid = document.getElementById('formatsGrid');
+    grid.innerHTML = '';
+    selectedFormat = null;
+
+    info.formats.forEach((f, i) => {
+      const btn = document.createElement('div');
+      btn.className = 'format-btn' + (i === 0 ? ' selected' : '');
+      if (i === 0) selectedFormat = f;
+      btn.innerHTML = `<div class="fmt-label">${f.label}</div><div class="fmt-size">${formatSize(f.filesize)}</div>`;
+      btn.onclick = () => {
+        document.querySelectorAll('.format-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        selectedFormat = f;
+      };
+      grid.appendChild(btn);
+    });
+
+    document.getElementById('result').style.display = 'block';
+  }
+
+  function downloadVideo() {
+    if (!currentInfo || !selectedFormat) return;
+    const url = document.getElementById('urlInput').value.trim();
+    const params = new URLSearchParams({
+      url,
+      format_id: selectedFormat.format_id,
+      title: currentInfo.title || 'video',
+    });
+    const btn = document.getElementById('downloadBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Starting download...';
+
+    // Trigger download via anchor
+    const a = document.createElement('a');
+    a.href = '/api/download?' + params.toString();
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.innerHTML = '&#8595; Download';
+    }, 3000);
+  }
+
+  // Allow Enter key to trigger fetch
+  document.getElementById('urlInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') fetchInfo();
+  });
+</script>
+</body>
+</html>
