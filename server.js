@@ -149,7 +149,12 @@ app.get('/api/download', async (req, res) => {
 
   const isAudio = format_id === 'bestaudio';
   const ext = isAudio ? 'mp3' : 'mp4';
-  const safeTitle = (title || 'video').replace(/[<>:"/\\|?*]/g, '').trim().slice(0, 100);
+  // Remove non-ASCII and invalid header characters, fallback to 'video'
+  const safeTitle = (title || 'video')
+    .replace(/[^\x20-\x7E]/g, '')   // strip non-ASCII (Myanmar, Arabic, CJK, etc.)
+    .replace(/[<>:"/\\|?*]/g, '')   // strip invalid filename chars
+    .trim()
+    .slice(0, 100) || 'video';
   const filename = `${safeTitle}.${ext}`;
 
   // Use a temp file so ffmpeg can merge properly (streaming to stdout breaks merging)
