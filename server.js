@@ -175,15 +175,12 @@ app.get('/api/download', async (req, res) => {
       url,
     ];
   } else {
-    // Always request video + best audio and merge to mp4
-    const fmtSelector = format_id && format_id !== 'best'
-      ? `${format_id}+bestaudio/bestvideo+bestaudio/best`
-      : 'bestvideo+bestaudio/best';
+    // Prefer mp4+m4a (no transcoding needed), fall back to best available
     args = [
       '-m', 'yt_dlp',
       ...ytdlpBase(),
       '--no-playlist',
-      '-f', fmtSelector,
+      '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best',
       '--merge-output-format', 'mp4',
       '-o', `${tmpBase}.%(ext)s`,
       url,
