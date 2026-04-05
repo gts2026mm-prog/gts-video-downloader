@@ -54,8 +54,25 @@ function setCache(url, data) {
   }
 }
 
-// ─── Concurrent download limiter ────────────────────────────────────────────
+// ─── Concurrent download limiter & stats ────────────────────────────────────
 let activeDownloads = 0;
+let totalDownloads = 0;
+const recentLogs = [];
+
+function addLog(msg, type = 'info') {
+  const time = new Date().toLocaleTimeString();
+  recentLogs.push({ time, msg, type });
+  if (recentLogs.length > 50) recentLogs.shift();
+}
+
+function formatUptime(secs) {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = Math.floor(secs % 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
 
 // ─── URL validation ─────────────────────────────────────────────────────────
 function isValidUrl(url) {
@@ -131,11 +148,16 @@ function runYtDlp(args) {
 
 // ─── Health check ───────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
+  const mem = process.memoryUsage();
   res.json({
     status: 'ok',
     activeDownloads,
+    maxConcurrent: MAX_CONCURRENT,
+    totalDownloads,
     cacheSize: infoCache.size,
-    uptime: Math.floor(process.uptime()) + 's',
+    uptime: formatUptime(process.uptime()),
+    memory: Math.round(mem.rss / 1024 / 1024) + ' MB',
+    recentLogs,
   });
 });
 
@@ -227,6 +249,8 @@ app.get('/api/download', rateLimit, async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
 
   activeDownloads++;
+  totalDownloads++;
+  addLog(`Started: ${filename}`, 'info');
   console.log(`[download] Start (${activeDownloads}/${MAX_CONCURRENT}): ${filename}`);
 
   // Timeout: kill download if it takes too long
@@ -282,10 +306,12 @@ app.get('/api/download', rateLimit, async (req, res) => {
       stream.on('close', () => {
         fs.unlink(tmpOut, () => {});
         cleanup();
+        addLog(`Done: ${filename}`, 'success');
         console.log(`[download] Done: ${filename}`);
       });
     } catch (err) {
       cleanup();
+      addLog(`Error: ${err.message}`, 'error');
       console.error('[audio error]', err.message);
       if (!res.headersSent) res.status(500).json({ error: err.message });
       else res.end();
@@ -322,6 +348,7 @@ app.get('/api/download', rateLimit, async (req, res) => {
   });
   proc.on('close', code => {
     cleanup();
+    addLog(code === 0 ? `Done: ${filename}` : `Failed (code ${code}): ${filename}`, code === 0 ? 'success' : 'error');
     console.log(`[download] Done (code ${code}): ${filename}`);
     res.end();
   });

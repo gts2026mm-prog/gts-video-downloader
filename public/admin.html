@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GTS Admin Panel</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #0f0f1a; color: #e0e0e0; min-height: 100vh; }
+
+    /* Login */
+    .login-wrap {
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh;
+    }
+    .login-card {
+      background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 16px;
+      padding: 40px; width: 100%; max-width: 380px;
+    }
+    .login-card h2 {
+      font-size: 22px; font-weight: 800; margin-bottom: 6px;
+      background: linear-gradient(90deg, #6c63ff, #ff6584);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .login-card p { color: #555; font-size: 13px; margin-bottom: 28px; }
+    .field { margin-bottom: 16px; }
+    .field label { font-size: 12px; color: #888; display: block; margin-bottom: 6px; }
+    .field input {
+      width: 100%; padding: 12px 14px; background: #12122a;
+      border: 1px solid #2a2a4a; border-radius: 10px; color: #e0e0e0;
+      font-size: 14px; outline: none;
+    }
+    .field input:focus { border-color: #6c63ff; }
+    .btn-login {
+      width: 100%; padding: 13px; background: linear-gradient(135deg, #6c63ff, #ff6584);
+      border: none; border-radius: 10px; color: white; font-size: 15px;
+      font-weight: 700; cursor: pointer; margin-top: 8px;
+    }
+    .btn-login:hover { opacity: 0.9; }
+    .login-error { color: #ff6b6b; font-size: 13px; margin-top: 10px; text-align: center; }
+
+    /* Dashboard */
+    #dashboard { display: none; }
+    .topbar {
+      background: #1a1a2e; border-bottom: 1px solid #2a2a4a;
+      padding: 14px 24px; display: flex; align-items: center; justify-content: space-between;
+    }
+    .topbar-logo {
+      font-size: 18px; font-weight: 800;
+      background: linear-gradient(90deg, #6c63ff, #ff6584);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .btn-logout {
+      background: #2a2a4a; border: none; color: #aaa; padding: 7px 16px;
+      border-radius: 8px; cursor: pointer; font-size: 13px;
+    }
+    .btn-logout:hover { background: #3a3a5a; }
+
+    .content { padding: 30px 24px; max-width: 900px; margin: 0 auto; }
+    .content h1 { font-size: 20px; font-weight: 700; margin-bottom: 24px; color: #ccc; }
+
+    .stats-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px; margin-bottom: 32px;
+    }
+    .stat-card {
+      background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 14px;
+      padding: 20px;
+    }
+    .stat-label { font-size: 12px; color: #666; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
+    .stat-value { font-size: 28px; font-weight: 800; color: #e0e0e0; }
+    .stat-value.green { color: #4ade80; }
+    .stat-value.purple { color: #a78bfa; }
+    .stat-value.pink { color: #f472b6; }
+    .stat-value.yellow { color: #fbbf24; }
+
+    .section { background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 14px; padding: 20px; margin-bottom: 20px; }
+    .section h2 { font-size: 15px; font-weight: 700; color: #aaa; margin-bottom: 16px; }
+
+    .log-list { max-height: 280px; overflow-y: auto; }
+    .log-item {
+      padding: 10px 12px; border-radius: 8px; margin-bottom: 6px;
+      background: #12122a; font-size: 13px; font-family: monospace;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .log-item .time { color: #555; font-size: 11px; white-space: nowrap; }
+    .log-item .msg { color: #ccc; }
+    .log-item.error .msg { color: #ff6b6b; }
+    .log-item.success .msg { color: #4ade80; }
+
+    .refresh-bar {
+      display: flex; align-items: center; gap: 12px; margin-bottom: 20px;
+    }
+    .btn-refresh {
+      background: #2a2a4a; border: none; color: #aaa; padding: 8px 16px;
+      border-radius: 8px; cursor: pointer; font-size: 13px;
+    }
+    .btn-refresh:hover { background: #3a3a5a; color: white; }
+    .last-updated { font-size: 12px; color: #555; }
+
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 20px;
+      font-size: 11px; font-weight: 600;
+    }
+    .badge.online { background: rgba(74,222,128,0.15); color: #4ade80; }
+    .badge.busy { background: rgba(251,191,36,0.15); color: #fbbf24; }
+  </style>
+</head>
+<body>
+
+<!-- Login -->
+<div class="login-wrap" id="loginPage">
+  <div class="login-card">
+    <h2>GTS Admin Panel</h2>
+    <p>Sign in to manage your downloader</p>
+    <div class="field">
+      <label>Username</label>
+      <input type="text" id="username" placeholder="Admin" autocomplete="off" />
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input type="password" id="password" placeholder="••••••••" />
+    </div>
+    <button class="btn-login" onclick="login()">Sign In</button>
+    <div class="login-error" id="loginError"></div>
+  </div>
+</div>
+
+<!-- Dashboard -->
+<div id="dashboard">
+  <div class="topbar">
+    <span class="topbar-logo">GTS Admin Panel</span>
+    <button class="btn-logout" onclick="logout()">Logout</button>
+  </div>
+
+  <div class="content">
+    <div class="refresh-bar">
+      <button class="btn-refresh" onclick="loadStats()">Refresh</button>
+      <span class="last-updated" id="lastUpdated"></span>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Status</div>
+        <div class="stat-value green" id="statStatus">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Active Downloads</div>
+        <div class="stat-value purple" id="statActive">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Downloads</div>
+        <div class="stat-value pink" id="statTotal">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Cache Size</div>
+        <div class="stat-value yellow" id="statCache">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Uptime</div>
+        <div class="stat-value" id="statUptime">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Memory Used</div>
+        <div class="stat-value" id="statMemory">—</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Recent Downloads</h2>
+      <div class="log-list" id="logList">
+        <div style="color:#555;font-size:13px;text-align:center;padding:20px">No logs yet</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const ADMIN_USER = 'Admin';
+  const ADMIN_PASS = 'Password';
+
+  function login() {
+    const u = document.getElementById('username').value;
+    const p = document.getElementById('password').value;
+    if (u === ADMIN_USER && p === ADMIN_PASS) {
+      sessionStorage.setItem('gts_admin', '1');
+      document.getElementById('loginPage').style.display = 'none';
+      document.getElementById('dashboard').style.display = 'block';
+      loadStats();
+      setInterval(loadStats, 10000); // auto-refresh every 10s
+    } else {
+      document.getElementById('loginError').textContent = 'Invalid username or password';
+    }
+  }
+
+  function logout() {
+    sessionStorage.removeItem('gts_admin');
+    location.reload();
+  }
+
+  // Auto-login if session exists
+  if (sessionStorage.getItem('gts_admin')) {
+    document.getElementById('loginPage').style.display = 'none';
+    document.getElementById('dashboard').style.display = 'block';
+    loadStats();
+    setInterval(loadStats, 10000);
+  }
+
+  async function loadStats() {
+    try {
+      const res = await fetch('/health');
+      const data = await res.json();
+      document.getElementById('statStatus').textContent = 'Online';
+      document.getElementById('statActive').textContent = data.activeDownloads + ' / ' + data.maxConcurrent;
+      document.getElementById('statTotal').textContent = data.totalDownloads;
+      document.getElementById('statCache').textContent = data.cacheSize + ' items';
+      document.getElementById('statUptime').textContent = data.uptime;
+      document.getElementById('statMemory').textContent = data.memory;
+      document.getElementById('lastUpdated').textContent = 'Updated: ' + new Date().toLocaleTimeString();
+
+      // Render logs
+      const logs = data.recentLogs || [];
+      const list = document.getElementById('logList');
+      if (logs.length === 0) {
+        list.innerHTML = '<div style="color:#555;font-size:13px;text-align:center;padding:20px">No downloads yet</div>';
+      } else {
+        list.innerHTML = logs.slice().reverse().map(l => `
+          <div class="log-item ${l.type}">
+            <span class="time">${l.time}</span>
+            <span class="msg">${l.msg}</span>
+          </div>
+        `).join('');
+      }
+    } catch (e) {
+      document.getElementById('statStatus').textContent = 'Offline';
+    }
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Enter') login();
+  });
+</script>
+</body>
+</html>
