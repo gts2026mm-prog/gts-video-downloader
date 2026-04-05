@@ -52,7 +52,11 @@ const FFMPEG_DIR = detectFfmpeg();
 
 // Build base yt-dlp args including ffmpeg location if known
 function ytdlpBase() {
-  return FFMPEG_DIR ? ['--ffmpeg-location', FFMPEG_DIR] : [];
+  const args = [];
+  if (FFMPEG_DIR) args.push('--ffmpeg-location', FFMPEG_DIR);
+  // Use Node.js as JS runtime for YouTube extraction (available in Docker)
+  args.push('--js-runtimes', 'nodejs');
+  return args;
 }
 
 // Run yt-dlp and return stdout as string

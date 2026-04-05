@@ -6,7 +6,8 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     ffmpeg \
     --no-install-recommends && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    ln -sf /usr/bin/python3 /usr/bin/python
 
 # Install yt-dlp
 RUN pip3 install yt-dlp --break-system-packages
