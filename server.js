@@ -27,7 +27,7 @@ function detectPython() {
 const PYTHON = detectPython();
 const SPAWN_OPTS = { windowsHide: true };
 
-// Detect ffmpeg location
+// Detect ffmpeg location — returns directory path or null if in system PATH
 function detectFfmpeg() {
   // Check system PATH first (Docker/Linux/Mac)
   try {
@@ -35,7 +35,7 @@ function detectFfmpeg() {
     console.log('Using system ffmpeg');
     return null; // already in PATH
   } catch {}
-  // Windows: check ffmpeg_downloader
+  // Windows: get path from ffmpeg_downloader (spawn handles apostrophes fine without shell:true)
   try {
     const p = execSync('python -c "import ffmpeg_downloader as f; print(f.ffmpeg_path)"', { stdio: 'pipe' }).toString().trim();
     if (p) {
@@ -44,7 +44,7 @@ function detectFfmpeg() {
       return dir;
     }
   } catch {}
-  console.warn('ffmpeg not found — high quality downloads may not work');
+  console.warn('ffmpeg not found — audio conversion may not work');
   return null;
 }
 
@@ -55,7 +55,7 @@ function ytdlpBase() {
   const args = [];
   if (FFMPEG_DIR) args.push('--ffmpeg-location', FFMPEG_DIR);
   // Use Node.js as JS runtime for YouTube extraction (available in Docker)
-  args.push('--js-runtimes', 'nodejs');
+  args.push('--js-runtimes', 'node');
   return args;
 }
 
@@ -179,7 +179,7 @@ app.get('/api/download', async (req, res) => {
       '-f', 'bestaudio/best',
       '-x', '--audio-format', 'mp3',
       '--audio-quality', '0',
-      '-o', `${tmpBase}.%(ext)s`,
+      '-o', `${tmpBase}.%(ext)s`,   // yt-dlp fills this in (e.g. .webm), then converts to .mp3
       url,
     ];
 
@@ -199,9 +199,9 @@ app.get('/api/download', async (req, res) => {
         req.on('close', () => { try { proc.kill(); } catch {} });
       });
 
-      const files = fs.readdirSync(tmpDir).filter(f => f.startsWith(path.basename(tmpBase)));
-      if (files.length === 0) throw new Error('Output file not found after download');
-      const tmpOut = path.join(tmpDir, files[0]);
+      // Look specifically for the .mp3 file (not the intermediate .webm)
+      const tmpOut = `${tmpBase}.mp3`;
+      if (!fs.existsSync(tmpOut)) throw new Error('MP3 file not found after conversion');
       const stat = fs.statSync(tmpOut);
       res.setHeader('Content-Length', stat.size);
       const stream = fs.createReadStream(tmpOut);
@@ -209,7 +209,7 @@ app.get('/api/download', async (req, res) => {
       stream.on('close', () => { fs.unlink(tmpOut, () => {}); console.log(`[download] Done: ${filename}`); });
     } catch (err) {
       console.error('[download error]', err.message);
-      try { fs.readdirSync(tmpDir).filter(f => f.startsWith(path.basename(tmpBase))).forEach(f => fs.unlink(path.join(tmpDir, f), () => {})); } catch {}
+      try { ['mp3','webm','m4a','opus'].forEach(e => fs.unlink(`${tmpBase}.${e}`, () => {})); } catch {}
       if (!res.headersSent) res.status(500).json({ error: err.message });
       else res.end();
     }
