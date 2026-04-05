@@ -157,14 +157,22 @@ app.get('/api/download', async (req, res) => {
     .slice(0, 100) || 'video';
   const filename = `${safeTitle}.${ext}`;
 
-  // Use a temp file so ffmpeg can merge properly (streaming to stdout breaks merging)
   const tmpDir = os.tmpdir();
   const tmpBase = path.join(tmpDir, `vdl_${Date.now()}`);
 
-  let args;
+  // For audio: must use temp file (ffmpeg conversion)
+  // For video: try to stream directly (single pre-merged format, no disk needed)
+  //            fall back to temp file only if merging is required
+  const needsMerge = !isAudio; // we'll try direct stream for video first
+
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
+
+  console.log(`[download] Starting: ${filename}`);
+
   if (isAudio) {
-    // Use %(ext)s so yt-dlp names the file after conversion (e.g. .mp3)
-    args = [
+    // Audio: download + convert to mp3 via temp file
+    const args = [
       '-m', 'yt_dlp',
       ...ytdlpBase(),
       '--no-playlist',
@@ -174,65 +182,74 @@ app.get('/api/download', async (req, res) => {
       '-o', `${tmpBase}.%(ext)s`,
       url,
     ];
-  } else {
-    // Prefer mp4+m4a (no transcoding needed), fall back to best available
-    args = [
-      '-m', 'yt_dlp',
-      ...ytdlpBase(),
-      '--no-playlist',
-      '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best',
-      '--merge-output-format', 'mp4',
-      '-o', `${tmpBase}.%(ext)s`,
-      url,
-    ];
-  }
 
-  console.log(`[download] Starting: ${filename}`);
-
-  try {
-    await new Promise((resolve, reject) => {
-      const proc = spawn(PYTHON, args, SPAWN_OPTS);
-      let stderr = '';
-      proc.stderr.on('data', d => { stderr += d.toString(); });
-      proc.on('error', err => reject(new Error(`Spawn error: ${err.message}`)));
-      proc.on('close', code => {
-        if (code === 0) resolve();
-        else {
-          const msg = stderr.split('\n').find(l => l.includes('ERROR') || l.trim()) || stderr;
-          reject(new Error(msg.replace(/^\s*ERROR:\s*/i, '').trim()));
-        }
-      });
-      req.on('close', () => { try { proc.kill(); } catch {} });
-    });
-
-    // Find the actual output file (yt-dlp fills in %(ext)s)
-    const files = fs.readdirSync(tmpDir).filter(f => f.startsWith(path.basename(tmpBase)));
-    if (files.length === 0) throw new Error('Output file not found after download');
-    const tmpOut = path.join(tmpDir, files[0]);
-
-    // Stream the finished file to the browser
-    const stat = fs.statSync(tmpOut);
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
-    res.setHeader('Content-Length', stat.size);
-
-    const stream = fs.createReadStream(tmpOut);
-    stream.pipe(res);
-    stream.on('close', () => {
-      fs.unlink(tmpOut, () => {});
-      console.log(`[download] Done: ${filename}`);
-    });
-
-  } catch (err) {
-    console.error('[download error]', err.message);
-    // Clean up any partial temp files
     try {
-      fs.readdirSync(tmpDir).filter(f => f.startsWith(path.basename(tmpBase)))
-        .forEach(f => fs.unlink(path.join(tmpDir, f), () => {}));
-    } catch {}
-    if (!res.headersSent) res.status(500).json({ error: err.message });
-    else res.end();
+      await new Promise((resolve, reject) => {
+        const proc = spawn(PYTHON, args, SPAWN_OPTS);
+        let stderr = '';
+        proc.stderr.on('data', d => { stderr += d.toString(); });
+        proc.on('error', err => reject(new Error(`Spawn error: ${err.message}`)));
+        proc.on('close', code => {
+          if (code === 0) resolve();
+          else {
+            const msg = stderr.split('\n').find(l => l.includes('ERROR') || l.trim()) || stderr;
+            reject(new Error(msg.replace(/^\s*ERROR:\s*/i, '').trim()));
+          }
+        });
+        req.on('close', () => { try { proc.kill(); } catch {} });
+      });
+
+      const files = fs.readdirSync(tmpDir).filter(f => f.startsWith(path.basename(tmpBase)));
+      if (files.length === 0) throw new Error('Output file not found after download');
+      const tmpOut = path.join(tmpDir, files[0]);
+      const stat = fs.statSync(tmpOut);
+      res.setHeader('Content-Length', stat.size);
+      const stream = fs.createReadStream(tmpOut);
+      stream.pipe(res);
+      stream.on('close', () => { fs.unlink(tmpOut, () => {}); console.log(`[download] Done: ${filename}`); });
+    } catch (err) {
+      console.error('[download error]', err.message);
+      try { fs.readdirSync(tmpDir).filter(f => f.startsWith(path.basename(tmpBase))).forEach(f => fs.unlink(path.join(tmpDir, f), () => {})); } catch {}
+      if (!res.headersSent) res.status(500).json({ error: err.message });
+      else res.end();
+    }
+    return;
   }
+
+  // Video: stream directly — NO ffmpeg merging (saves memory, supports large files)
+  // Only download pre-merged single-file formats to avoid OOM on free hosting
+  const fmtSelector = [
+    'best[ext=mp4][height<=720]',  // best pre-merged mp4 up to 720p
+    'best[ext=mp4]',               // any pre-merged mp4
+    'best',                        // any pre-merged format
+  ].join('/');
+
+  const args = [
+    '-m', 'yt_dlp',
+    ...ytdlpBase(),
+    '--no-playlist',
+    '-f', fmtSelector,
+    '-o', '-',   // stream to stdout directly, no ffmpeg
+    url,
+  ];
+
+  const proc = spawn(PYTHON, args, SPAWN_OPTS);
+  proc.stdout.pipe(res);
+  proc.stderr.on('data', chunk => {
+    const line = chunk.toString();
+    if (line.includes('ERROR')) console.error('[video error]', line.trim());
+  });
+  proc.on('error', err => {
+    console.error('[spawn error]', err.message);
+    if (!res.headersSent) res.status(500).end();
+    else res.end();
+  });
+  proc.on('close', code => {
+    console.log(`[download] Done (code ${code}): ${filename}`);
+    res.end();
+  });
+  req.on('close', () => { try { proc.kill(); } catch {} });
+
 });
 
 app.listen(PORT, () => {
