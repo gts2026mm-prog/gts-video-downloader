@@ -8,11 +8,66 @@ const os = require('os');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ─── Config ────────────────────────────────────────────────────────────────
+const MAX_CONCURRENT = 3;       // max simultaneous downloads
+const DOWNLOAD_TIMEOUT = 5 * 60 * 1000; // 5 min timeout per download
+const INFO_CACHE_TTL = 5 * 60 * 1000;   // cache video info for 5 min
+const RATE_LIMIT_WINDOW = 60 * 1000;    // 1 min window
+const RATE_LIMIT_MAX = 20;              // max 20 requests per IP per minute
+
+// ─── Middleware ─────────────────────────────────────────────────────────────
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Detect python path at startup
+// ─── Rate limiter (in-memory) ───────────────────────────────────────────────
+const rateLimitMap = new Map();
+function rateLimit(req, res, next) {
+  const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.ip;
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip) || { count: 0, start: now };
+  if (now - entry.start > RATE_LIMIT_WINDOW) {
+    entry.count = 1; entry.start = now;
+  } else {
+    entry.count++;
+  }
+  rateLimitMap.set(ip, entry);
+  if (entry.count > RATE_LIMIT_MAX) {
+    return res.status(429).json({ error: 'Too many requests. Please wait a moment.' });
+  }
+  next();
+}
+
+// ─── Video info cache ───────────────────────────────────────────────────────
+const infoCache = new Map();
+function getCached(url) {
+  const entry = infoCache.get(url);
+  if (entry && Date.now() - entry.time < INFO_CACHE_TTL) return entry.data;
+  return null;
+}
+function setCache(url, data) {
+  infoCache.set(url, { data, time: Date.now() });
+  // Keep cache size reasonable
+  if (infoCache.size > 100) {
+    const oldest = [...infoCache.entries()].sort((a, b) => a[1].time - b[1].time)[0];
+    infoCache.delete(oldest[0]);
+  }
+}
+
+// ─── Concurrent download limiter ────────────────────────────────────────────
+let activeDownloads = 0;
+
+// ─── URL validation ─────────────────────────────────────────────────────────
+function isValidUrl(url) {
+  try {
+    const u = new URL(url);
+    return ['http:', 'https:'].includes(u.protocol);
+  } catch {
+    return false;
+  }
+}
+
+// ─── Detect tools ───────────────────────────────────────────────────────────
 function detectPython() {
   for (const cmd of ['python', 'python3', 'py']) {
     try {
@@ -24,18 +79,12 @@ function detectPython() {
   throw new Error('yt-dlp not found. Run: pip install yt-dlp');
 }
 
-const PYTHON = detectPython();
-const SPAWN_OPTS = { windowsHide: true };
-
-// Detect ffmpeg location — returns directory path or null if in system PATH
 function detectFfmpeg() {
-  // Check system PATH first (Docker/Linux/Mac)
   try {
     execSync('ffmpeg -version', { stdio: 'pipe' });
     console.log('Using system ffmpeg');
-    return null; // already in PATH
+    return null;
   } catch {}
-  // Windows: get path from ffmpeg_downloader (spawn handles apostrophes fine without shell:true)
   try {
     const p = execSync('python -c "import ffmpeg_downloader as f; print(f.ffmpeg_path)"', { stdio: 'pipe' }).toString().trim();
     if (p) {
@@ -48,23 +97,24 @@ function detectFfmpeg() {
   return null;
 }
 
+const PYTHON = detectPython();
 const FFMPEG_DIR = detectFfmpeg();
+const SPAWN_OPTS = { windowsHide: true };
 
-// Build base yt-dlp args including ffmpeg location if known
 function ytdlpBase() {
   const args = [];
   if (FFMPEG_DIR) args.push('--ffmpeg-location', FFMPEG_DIR);
-  // Use Node.js as JS runtime for YouTube extraction (available in Docker)
   args.push('--js-runtimes', 'node');
+  args.push('--socket-timeout', '30');
+  args.push('--retries', '3');
   return args;
 }
 
-// Run yt-dlp and return stdout as string
+// ─── Run yt-dlp (info fetch) ────────────────────────────────────────────────
 function runYtDlp(args) {
   return new Promise((resolve, reject) => {
     const proc = spawn(PYTHON, ['-m', 'yt_dlp', ...ytdlpBase(), ...args], SPAWN_OPTS);
-    let stdout = '';
-    let stderr = '';
+    let stdout = '', stderr = '';
     proc.stdout.on('data', d => (stdout += d.toString()));
     proc.stderr.on('data', d => (stderr += d.toString()));
     proc.on('error', err => reject(new Error(`Spawn error: ${err.message}`)));
@@ -72,7 +122,6 @@ function runYtDlp(args) {
       if (code === 0) {
         resolve(stdout.trim());
       } else {
-        // Extract first meaningful line from stderr
         const msg = stderr.split('\n').find(l => l.includes('ERROR') || l.trim()) || stderr;
         reject(new Error(msg.replace(/^\s*ERROR:\s*/i, '').trim()));
       }
@@ -80,27 +129,37 @@ function runYtDlp(args) {
   });
 }
 
-// GET /api/info?url=...
-app.get('/api/info', async (req, res) => {
+// ─── Health check ───────────────────────────────────────────────────────────
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    activeDownloads,
+    cacheSize: infoCache.size,
+    uptime: Math.floor(process.uptime()) + 's',
+  });
+});
+
+// ─── GET /api/info ──────────────────────────────────────────────────────────
+app.get('/api/info', rateLimit, async (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: 'URL is required' });
+  if (!isValidUrl(url)) return res.status(400).json({ error: 'Invalid URL' });
+
+  // Return cached result if available
+  const cached = getCached(url);
+  if (cached) return res.json(cached);
 
   try {
     const json = await runYtDlp([
-      '--dump-json',
-      '--no-playlist',
-      '--no-warnings',
-      url,
+      '--dump-json', '--no-playlist', '--no-warnings', url,
     ]);
 
     const info = JSON.parse(json);
     const allFormats = info.formats || [];
 
-    // Collect unique heights from all video formats
     const seenHeights = new Set();
     const formats = [];
 
-    // Prefer combined (video+audio) mp4 first, then video-only
     const combined = allFormats.filter(f => f.vcodec !== 'none' && f.acodec !== 'none');
     const videoOnly = allFormats.filter(f => f.vcodec !== 'none' && f.acodec === 'none');
 
@@ -117,78 +176,94 @@ app.get('/api/info', async (req, res) => {
       });
     }
 
-    // Sort best quality first
     formats.sort((a, b) => b.height - a.height);
 
-    // Add best overall fallback if no formats found
     if (formats.length === 0) {
       formats.push({ format_id: 'best', label: 'Best quality', ext: 'mp4', filesize: null, height: 9999 });
     }
 
-    // Audio only
     formats.push({ format_id: 'bestaudio', label: 'Audio only (MP3)', ext: 'mp3', filesize: null, height: -1 });
 
-    res.json({
+    const result = {
       title: info.title,
       thumbnail: info.thumbnail,
       duration: info.duration,
       uploader: info.uploader,
       platform: info.extractor_key,
       formats,
-    });
+    };
+
+    setCache(url, result);
+    res.json(result);
   } catch (err) {
     console.error('[/api/info error]', err.message);
     res.status(400).json({ error: err.message });
   }
 });
 
-// GET /api/download?url=...&format_id=...&title=...
-app.get('/api/download', async (req, res) => {
+// ─── GET /api/download ──────────────────────────────────────────────────────
+app.get('/api/download', rateLimit, async (req, res) => {
   const { url, format_id, title } = req.query;
   if (!url) return res.status(400).json({ error: 'URL is required' });
+  if (!isValidUrl(url)) return res.status(400).json({ error: 'Invalid URL' });
+
+  if (activeDownloads >= MAX_CONCURRENT) {
+    return res.status(503).json({ error: 'Server busy. Please try again in a moment.' });
+  }
 
   const isAudio = format_id === 'bestaudio';
   const ext = isAudio ? 'mp3' : 'mp4';
-  // Remove non-ASCII and invalid header characters, fallback to 'video'
   const safeTitle = (title || 'video')
-    .replace(/[^\x20-\x7E]/g, '')   // strip non-ASCII (Myanmar, Arabic, CJK, etc.)
-    .replace(/[<>:"/\\|?*]/g, '')   // strip invalid filename chars
-    .trim()
-    .slice(0, 100) || 'video';
+    .replace(/[^\x20-\x7E]/g, '')
+    .replace(/[<>:"/\\|?*]/g, '')
+    .trim().slice(0, 100) || 'video';
   const filename = `${safeTitle}.${ext}`;
 
   const tmpDir = os.tmpdir();
-  const tmpBase = path.join(tmpDir, `vdl_${Date.now()}`);
-
-  // For audio: must use temp file (ffmpeg conversion)
-  // For video: try to stream directly (single pre-merged format, no disk needed)
-  //            fall back to temp file only if merging is required
-  const needsMerge = !isAudio; // we'll try direct stream for video first
+  const tmpBase = path.join(tmpDir, `vdl_${Date.now()}_${Math.random().toString(36).slice(2)}`);
 
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
 
-  console.log(`[download] Starting: ${filename}`);
+  activeDownloads++;
+  console.log(`[download] Start (${activeDownloads}/${MAX_CONCURRENT}): ${filename}`);
+
+  // Timeout: kill download if it takes too long
+  const timeout = setTimeout(() => {
+    console.error(`[download] Timeout: ${filename}`);
+    cleanup();
+    if (!res.headersSent) res.status(504).json({ error: 'Download timed out' });
+    else res.end();
+  }, DOWNLOAD_TIMEOUT);
+
+  let proc = null;
+  function cleanup() {
+    clearTimeout(timeout);
+    activeDownloads = Math.max(0, activeDownloads - 1);
+    try { if (proc) proc.kill(); } catch {}
+    ['mp3', 'webm', 'm4a', 'opus', 'mp4'].forEach(e =>
+      fs.unlink(`${tmpBase}.${e}`, () => {})
+    );
+  }
+
+  req.on('close', cleanup);
 
   if (isAudio) {
-    // Audio: download + convert to mp3 via temp file
     const args = [
-      '-m', 'yt_dlp',
-      ...ytdlpBase(),
+      '-m', 'yt_dlp', ...ytdlpBase(),
       '--no-playlist',
       '-f', 'bestaudio/best',
-      '-x', '--audio-format', 'mp3',
-      '--audio-quality', '0',
-      '-o', `${tmpBase}.%(ext)s`,   // yt-dlp fills this in (e.g. .webm), then converts to .mp3
+      '-x', '--audio-format', 'mp3', '--audio-quality', '0',
+      '-o', `${tmpBase}.%(ext)s`,
       url,
     ];
-
     try {
       await new Promise((resolve, reject) => {
-        const proc = spawn(PYTHON, args, SPAWN_OPTS);
+        proc = spawn(PYTHON, args, SPAWN_OPTS);
         let stderr = '';
         proc.stderr.on('data', d => { stderr += d.toString(); });
-        proc.on('error', err => reject(new Error(`Spawn error: ${err.message}`)));
+        proc.on('error', err => reject(new Error(err.message)));
         proc.on('close', code => {
           if (code === 0) resolve();
           else {
@@ -196,62 +271,78 @@ app.get('/api/download', async (req, res) => {
             reject(new Error(msg.replace(/^\s*ERROR:\s*/i, '').trim()));
           }
         });
-        req.on('close', () => { try { proc.kill(); } catch {} });
       });
 
-      // Look specifically for the .mp3 file (not the intermediate .webm)
       const tmpOut = `${tmpBase}.mp3`;
-      if (!fs.existsSync(tmpOut)) throw new Error('MP3 file not found after conversion');
+      if (!fs.existsSync(tmpOut)) throw new Error('MP3 conversion failed');
       const stat = fs.statSync(tmpOut);
       res.setHeader('Content-Length', stat.size);
       const stream = fs.createReadStream(tmpOut);
       stream.pipe(res);
-      stream.on('close', () => { fs.unlink(tmpOut, () => {}); console.log(`[download] Done: ${filename}`); });
+      stream.on('close', () => {
+        fs.unlink(tmpOut, () => {});
+        cleanup();
+        console.log(`[download] Done: ${filename}`);
+      });
     } catch (err) {
-      console.error('[download error]', err.message);
-      try { ['mp3','webm','m4a','opus'].forEach(e => fs.unlink(`${tmpBase}.${e}`, () => {})); } catch {}
+      cleanup();
+      console.error('[audio error]', err.message);
       if (!res.headersSent) res.status(500).json({ error: err.message });
       else res.end();
     }
     return;
   }
 
-  // Video: stream directly — NO ffmpeg merging (saves memory, supports large files)
-  // Only download pre-merged single-file formats to avoid OOM on free hosting
+  // Video: stream directly, no ffmpeg merge
   const fmtSelector = [
-    'best[ext=mp4][height<=720]',  // best pre-merged mp4 up to 720p
-    'best[ext=mp4]',               // any pre-merged mp4
-    'best',                        // any pre-merged format
+    'best[ext=mp4][height<=720]',
+    'best[ext=mp4]',
+    'best',
   ].join('/');
 
   const args = [
-    '-m', 'yt_dlp',
-    ...ytdlpBase(),
+    '-m', 'yt_dlp', ...ytdlpBase(),
     '--no-playlist',
     '-f', fmtSelector,
-    '-o', '-',   // stream to stdout directly, no ffmpeg
+    '-o', '-',
     url,
   ];
 
-  const proc = spawn(PYTHON, args, SPAWN_OPTS);
+  proc = spawn(PYTHON, args, SPAWN_OPTS);
   proc.stdout.pipe(res);
   proc.stderr.on('data', chunk => {
     const line = chunk.toString();
     if (line.includes('ERROR')) console.error('[video error]', line.trim());
   });
   proc.on('error', err => {
+    cleanup();
     console.error('[spawn error]', err.message);
     if (!res.headersSent) res.status(500).end();
     else res.end();
   });
   proc.on('close', code => {
+    cleanup();
     console.log(`[download] Done (code ${code}): ${filename}`);
     res.end();
   });
-  req.on('close', () => { try { proc.kill(); } catch {} });
-
 });
 
+// ─── 404 handler ────────────────────────────────────────────────────────────
+app.use((req, res) => res.status(404).json({ error: 'Not found' }));
+
+// ─── Global error handler ────────────────────────────────────────────────────
+app.use((err, req, res, next) => {
+  console.error('[unhandled error]', err.message);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+// ─── Graceful shutdown ───────────────────────────────────────────────────────
+process.on('SIGTERM', () => {
+  console.log('Shutting down gracefully...');
+  process.exit(0);
+});
+
+// ─── Start ───────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\nVideo Downloader ready! Open: http://localhost:${PORT}\n`);
+  console.log(`\nGTS Downloader ready! http://localhost:${PORT}\n`);
 });
